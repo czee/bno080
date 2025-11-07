@@ -18,36 +18,32 @@ use panic_rtt_core::rprintln;
 /// - CSN: chip select line that selects the device on the shared SPI bus
 /// - HINTN: Hardware Interrupt. Sensor uses this to indicate it had data available for read
 /// - RSTN: Reset the device
-pub struct SpiControlLines<SPI, CSN, IN, RSTN> {
+pub struct SpiControlLines<SPI, IN, RSTN> {
     pub spi: SPI,
-    pub csn: CSN,
     pub hintn: IN,
     pub reset: RSTN,
 }
 
 /// This combines the SPI peripheral and associated control pins
 ///
-pub struct SpiInterface<SPI, CSN, IN, RSTN> {
+pub struct SpiInterface<SPI, IN, RSTN> {
     spi: SPI,
-    csn: CSN,
     hintn: IN,
     reset: RSTN,
     received_packet_count: usize,
 }
 
-impl<SPI, CSN, IN, RSTN, CommE, PinE> SpiInterface<SPI, CSN, IN, RSTN>
+impl<SPI, IN, RSTN, CommE, PinE> SpiInterface<SPI, IN, RSTN>
 where
     SPI: embedded_hal::spi::SpiDevice<u8, Error = CommE>,
-    CSN: OutputPin<Error = PinE>,
     IN: InputPin<Error = PinE>,
     RSTN: OutputPin<Error = PinE>,
     CommE: core::fmt::Debug,
     PinE: core::fmt::Debug,
 {
-    pub fn new(lines: SpiControlLines<SPI, CSN, IN, RSTN>) -> Self {
+    pub fn new(lines: SpiControlLines<SPI, IN, RSTN>) -> Self {
         Self {
             spi: lines.spi,
-            csn: lines.csn,
             hintn: lines.hintn,
             reset: lines.reset,
             received_packet_count: 0,
@@ -120,11 +116,10 @@ where
     }
 }
 
-impl<SPI, CSN, IN, RS, CommE, PinE> SensorInterface
-    for SpiInterface<SPI, CSN, IN, RS>
+impl<SPI, IN, RS, CommE, PinE> SensorInterface
+    for SpiInterface<SPI, IN, RS>
 where
     SPI: embedded_hal::spi::SpiDevice<u8, Error = CommE>,
-    CSN: OutputPin<Error = PinE>,
     IN: InputPin<Error = PinE>,
     RS: OutputPin<Error = PinE>,
     CommE: core::fmt::Debug,
@@ -140,10 +135,8 @@ where
         &mut self,
         delay_source: &mut impl DelayNs,
     ) -> Result<(), Self::SensorError> {
-        // Deselect sensor
-        self.csn.set_high().map_err(Error::Pin)?;
         // Note: This assumes that WAK/PS0 is set to high already
-        //TODO allow the user to provide a WAK pin
+        //TODO allow the user to prvide a WAK pin
         // should already be high by default, but just in case...
         self.reset.set_high().map_err(Error::Pin)?;
 
@@ -172,9 +165,7 @@ where
         recv_buf: &mut [u8],
     ) -> Result<usize, Self::SensorError> {
         // select the sensor
-        self.csn.set_low().map_err(Error::Pin)?;
         let rc = self.spi.write(send_buf).map_err(Error::Comm);
-        self.csn.set_high().map_err(Error::Pin)?;
         if let Err(e) = rc {
             //release the sensor
             return Err(e);
@@ -194,7 +185,6 @@ where
             return Ok(0);
         }
 
-        self.csn.set_low().map_err(Error::Pin)?;
         // get just the header
         let rc = self
             .spi
@@ -204,14 +194,10 @@ where
             //release the sensor
             #[cfg(feature = "rttdebug")]
             rprintln!("transfer err: {:?}", rc);
-            self.csn.set_high().map_err(Error::Pin)?;
             return Err(rc.unwrap_err());
         }
 
         let packet_len = self.read_packet_cargo(recv_buf);
-
-        //release the sensor
-        self.csn.set_high().map_err(Error::Pin)?;
 
         if packet_len > 0 {
             self.received_packet_count += 1;
@@ -221,9 +207,7 @@ where
     }
 
     fn write_packet(&mut self, packet: &[u8]) -> Result<(), Self::SensorError> {
-        self.csn.set_low().map_err(Error::Pin)?;
         let rc = self.spi.write(packet).map_err(Error::Comm);
-        self.csn.set_high().map_err(Error::Pin)?;
 
         if let Err(e) = rc {
             return Err(e);
@@ -245,8 +229,6 @@ where
             *i = 0;
         }
 
-        // grab this sensor
-        self.csn.set_low().map_err(Error::Pin)?;
         // get just the header
         let rc = self
             .spi
@@ -254,15 +236,10 @@ where
             .map_err(Error::Comm);
 
         if rc.is_err() {
-            //release the sensor
-            self.csn.set_high().map_err(Error::Pin)?;
             return Err(rc.unwrap_err());
         }
 
         let packet_len = self.read_packet_cargo(recv_buf);
-
-        //release the sensor
-        self.csn.set_high().map_err(Error::Pin)?;
 
         if packet_len > 0 {
             self.received_packet_count += 1;
